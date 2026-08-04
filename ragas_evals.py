@@ -1,239 +1,90 @@
-# Import Dataset so we can create data in the format RAGAS needs
-from datasets import Dataset
+"""
+RAGAS EVALUATION SCRIPT
+========================
+This script scores how good your RAG app's answers are, using 4 metrics.
+It does NOT run your app live — it reads pre-collected question/answer/context
+data from test_set.json and asks an LLM "judge" to grade each one.
 
-# Import evaluate function from RAGAS
-from ragas import evaluate
+Think of it as 4 separate report cards, one per answer, then averaged.
+"""
 
-# Import the RAGAS metrics we want to test
+# 1. IMPORTS
+# -----------------------------------------------------------------
+# SingleTurnSample = one row of evaluation data (one question + its answer).
+# EvaluationDataset = a collection of SingleTurnSample rows, the format
+#                      RAGAS's evaluate() function expects.
+from ragas import SingleTurnSample, EvaluationDataset
+from ragas import evaluate                              # runs the metrics over the dataset
+
+# The 4 metrics we're using to grade the RAG pipeline.
+# Each one asks the judge LLM a different question about each answer.
 from ragas.metrics import (
-    faithfulness,
-    answer_relevancy,
-    context_precision,
-    context_recall,
+    faithfulness,       # "Is the answer backed up by the retrieved context, or did it make things up?"
+    answer_relevancy,   # "Does the answer actually address the question that was asked?"
+    context_precision,  # "Of the context that was retrieved, how much of it was actually useful?"
+    context_recall,     # "Did the retrieval step pull in enough context to answer correctly?"
 )
 
-# This wrapper lets RAGAS use a LangChain LLM
-from ragas.llms import LangchainLLMWrapper
+from ragas.llms import LangchainLLMWrapper   # lets RAGAS use a LangChain chat model as its judge
+from langchain_openai import ChatOpenAI      # the actual OpenAI chat model class
 
-# ChatOpenAI is used to connect OpenAI model through LangChain
-from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv               # reads OPENAI_API_KEY out of your .env file
+import json                                  # to read test_set.json
+import pandas as pd                          # to save the results as a CSV
 
-# Loads the API key from .env file
-from dotenv import load_dotenv
-
-# Used to save results in CSV format
-import pandas as pd
-
-# Used to read JSON test files
-import json
-
-
-# Load environment variables from .env file
 load_dotenv()
 
 
-# This class handles the RAGAS evaluation
-class RAGASEvaluator:
-
-    # This runs when we create the evaluator object
-    def __init__(self, model_name="gpt-3.5-turbo"):
-
-        # Create the OpenAI model with temperature 0 for stable answers
-        llm = ChatOpenAI(model=model_name, temperature=0)
-
-        # Wrap the LLM so RAGAS can use it
-        ragas_llm = LangchainLLMWrapper(llm)
-
-        # Store all the metrics we want to calculate
-        self.metrics = [
-            faithfulness,
-            answer_relevancy,
-            context_precision,
-            context_recall,
-        ]
-
-        # Give the same LLM to each metric
-        for metric in self.metrics:
-            metric.llm = ragas_llm
-
-    # This function evaluates already collected data
-    def evaluate_data(self, questions, answers, contexts, ground_truths):
-
-        # Create a dataset in the format RAGAS expects
-        dataset = Dataset.from_dict({
-            "question": questions,
-            "answer": answers,
-            "contexts": contexts,
-            "ground_truth": ground_truths,
-        })
-
-        # Print message before evaluation starts
-        print("Running evaluation...")
-
-        # Run RAGAS evaluation using the dataset and metrics
-        result = evaluate(dataset=dataset, metrics=self.metrics)
-
-        # Store average scores for each metric
-        scores = {
-            "faithfulness": self.get_average(result["faithfulness"]),
-            "answer_relevancy": self.get_average(result["answer_relevancy"]),
-            "context_precision": self.get_average(result["context_precision"]),
-            "context_recall": self.get_average(result["context_recall"]),
-        }
-
-        # Print the final scores
-        print("\nRAGAS Scores:")
-
-        # Print each metric score one by one
-        for name, score in scores.items():
-            print(f"{name}: {score:.4f}")
-
-        # Return both scores and full dataframe
-        return {
-            "scores": scores,
-            "dataframe": result.to_pandas()
-        }
-
-    # This function runs the full RAG pipeline first, then evaluates it
-    def evaluate_pipeline(self, questions, ground_truths, vector_store):
-
-        # Import retrieval class from our project
-        from retrieval import Retrieval
-
-        # Import LLM class from our project
-        from llm import LLM
-
-        # Create retrieval object
-        retrieval = Retrieval()
-
-        # Create LLM object
-        llm = LLM()
-
-        # Empty list to store generated answers
-        answers = []
-
-        # Empty list to store retrieved contexts
-        contexts = []
-
-        # Loop through every question
-        for question in questions:
-
-            # Retrieve relevant documents from vector store
-            docs = retrieval.retrieve(question, vector_store)
-
-            # Empty list for storing text from documents
-            context_texts = []
-
-            # Take text from every retrieved document
-            for doc in docs:
-                context_texts.append(doc.page_content)
-
-            # Generate answer using our RAG pipeline
-            answer = llm.generate_response(question, vector_store)
-
-            # Save generated answer
-            answers.append(answer)
-
-            # Save retrieved context text
-            contexts.append(context_texts)
-
-        # Evaluate the generated answers and contexts
-        return self.evaluate_data(
-            questions,
-            answers,
-            contexts,
-            ground_truths
-        )
-
-    # This function loads test data from a JSON file
-    def load_test_set(self, path):
-
-        # Open the JSON file
-        with open(path, "r") as file:
-
-            # Read JSON data
-            data = json.load(file)
-
-        # Empty list for questions
-        questions = []
-
-        # Empty list for generated answers
-        answers = []
-
-        # Empty list for retrieved contexts
-        contexts = []
-
-        # Empty list for correct reference answers
-        ground_truths = []
-
-        # Loop through each item in the JSON file
-        for item in data:
-
-            # Add question
-            questions.append(item["question"])
-
-            # Add correct answer
-            ground_truths.append(item["ground_truth"])
-
-            # Add generated answer if it exists, otherwise add empty string
-            answers.append(item.get("answer", ""))
-
-            # Add contexts if they exist, otherwise add empty list
-            contexts.append(item.get("contexts", []))
-
-        # Return all lists
-        return questions, answers, contexts, ground_truths
-
-    # This function saves final result dataframe into a CSV file
-    def save_results(self, results, output_path="evaluation_results.csv"):
-
-        # Get dataframe from results dictionary
-        df = results["dataframe"]
-
-        # Save dataframe as CSV
-        df.to_csv(output_path, index=False)
-
-        # Print where the file was saved
-        print(f"Saved results to {output_path}")
-
-    # This helper function calculates average score
-    def get_average(self, values):
-
-        # If values are in list form, calculate average manually
-        if isinstance(values, list):
-
-            # Remove None values
-            clean_values = [v for v in values if v is not None]
-
-            # If no valid values exist, return 0
-            if len(clean_values) == 0:
-                return 0
-
-            # Return average of valid values
-            return sum(clean_values) / len(clean_values)
-
-        # If value is already one number, convert it to float
-        return float(values)
+# 2. THE JUDGE
+# -----------------------------------------------------------------
+# RAGAS metrics work by asking an LLM to grade each answer (e.g. "on a
+# scale of 0-1, is this faithful to the context?"). That grading LLM is
+# called the "judge". temperature=0 makes its grading as consistent and
+# repeatable as possible (no creative randomness when scoring).
+judge = LangchainLLMWrapper(ChatOpenAI(model="gpt-3.5-turbo", temperature=0))
 
 
-# This part only runs when this file is executed directly
-if __name__ == "__main__":
+# 3. THE METRICS
+# -----------------------------------------------------------------
+# Every metric needs to know which LLM to use as its judge, so we assign
+# it here before running anything.
+metrics = [faithfulness, answer_relevancy, context_precision, context_recall]
+for metric in metrics:
+    metric.llm = judge
 
-    # Create evaluator object
-    evaluator = RAGASEvaluator()
 
-    # Load questions, answers, contexts, and ground truths from JSON file
-    questions, answers, contexts, ground_truths = evaluator.load_test_set(
-        "test_set.json"
+# 4. THE DATA
+# -----------------------------------------------------------------
+# test_set.json holds the questions, the answers your RAG app produced,
+# the context chunks it retrieved, and the "correct" reference answer
+# you wrote by hand. Each entry becomes one SingleTurnSample.
+with open("test_set.json", "r", encoding="utf-8") as f:
+    test_cases = json.load(f)
+
+samples = [
+    SingleTurnSample(
+        user_input=case["question"],           # the question that was asked
+        retrieved_contexts=case["contexts"],    # the chunks your retriever pulled from the PDF
+        response=case["answer"],                # what your RAG app answered
+        reference=case["ground_truth"],         # the answer you'd consider "correct"
     )
+    for case in test_cases
+]
 
-    # Run evaluation on the loaded test data
-    results = evaluator.evaluate_data(
-        questions,
-        answers,
-        contexts,
-        ground_truths
-    )
+dataset = EvaluationDataset(samples=samples)
 
-    # Save results into CSV file
-    evaluator.save_results(results)
+
+# 5. RUN + READ
+# -----------------------------------------------------------------
+# This sends every sample to the judge LLM once per metric (4 metrics x
+# N questions = 4N judge calls), so it can take a little while and will
+# use OpenAI credits.
+result = evaluate(dataset=dataset, metrics=metrics)
+
+print(result)
+
+# Save a row-by-row breakdown (one row per question, one column per
+# metric) so you can see which specific answers scored low, not just
+# the overall average.
+result.to_pandas().to_csv("evaluation_results.csv", index=False)
+print("\nSaved detailed scores to evaluation_results.csv")

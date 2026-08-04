@@ -1,0 +1,20 @@
+[
+  {
+    "question": "What is RAG?",
+    "answer": "RAG stands for Retrieval-Augmented Generation. It combines document retrieval with large language models to answer questions based on specific documents.",
+    "contexts": ["RAG retrieves relevant documents from a knowledge base and uses them to generate accurate answers"],
+    "ground_truth": "RAG is retrieval-augmented generation that combines retrieval and generation"
+  },
+  {
+    "question": "How does FAISS work?",
+    "answer": "FAISS is a vector similarity search library. It creates indexes of vector embeddings to enable fast nearest neighbor search for finding similar documents efficiently.",
+    "contexts": ["FAISS uses approximate nearest neighbor search algorithms to quickly find similar vectors"],
+    "ground_truth": "FAISS is a library for efficient similarity search and clustering of vectors"
+  },
+  {
+    "question": "What is the purpose of embeddings?",
+    "answer": "Embeddings convert text into numerical vectors that capture semantic meaning. These vectors allow comparing similarity between texts mathematically.",
+    "contexts": ["Embeddings represent the meaning of text as vectors in high-dimensional space"],
+    "ground_truth": "Embeddings convert text to vectors that capture semantic meaning"
+  }
+]

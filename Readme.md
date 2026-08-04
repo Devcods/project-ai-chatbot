@@ -2,7 +2,7 @@
 
 This is a simple RAG based PDF question answering app.
 
-The user can upload a PDF, ask a question, and get an answer based on the PDF content. The project uses LangChain, OpenAI, FAISS, and Streamlit. I also added RAGAS evaluation to check the quality of the answers.
+The user can upload a PDF, ask a question, and get an answer based on the PDF content. The project uses LangChain, OpenAI, Chroma, and Streamlit. I also added RAGAS evaluation to check the quality of the answers.
 
 # Main Features
 
@@ -12,7 +12,7 @@ Split the PDF into smaller text chunks.
 
 Create embeddings from the chunks.
 
-Store the embeddings in FAISS.
+Store the embeddings in Chroma.
 
 Retrieve the most relevant chunks for a question.
 
@@ -28,13 +28,13 @@ pdf_loader.py loads the PDF.
 
 chunk.py splits the PDF text.
 
-embedding.py creates the FAISS vector store.
+embedding.py creates the Chroma vector store.
 
 retrieval.py finds relevant chunks.
 
 llm.py generates answers using the retrieved context.
 
-evaluate.py runs RAGAS evaluation.
+ragas_evals.py runs RAGAS evaluation.
 
 test_set.json stores sample evaluation questions.
 
@@ -58,13 +58,13 @@ To run the RAGAS evaluation, update test_set.json with test questions and answer
 
 Then run:
 
-    python evaluate.py
+    python ragas_evals.py
 
 The results are printed in the terminal and saved in evaluation_results.csv.
 
 # Future Improvements
 
-Save the FAISS vector store so the PDF does not need to be embedded again every time.
+Persist the Chroma vector store to disk so the PDF does not need to be embedded again every time.
 
 Support multiple PDFs.
 

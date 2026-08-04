@@ -2,7 +2,10 @@ langchain
 langchain-community
 langchain-openai
 openai
-faiss-cpu
+chromadb
+langchain-chroma
 streamlit
 pypdf
 python-dotenv
+ragas
+pandas
