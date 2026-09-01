@@ -6,10 +6,10 @@
     "ground_truth": "RAG is retrieval-augmented generation that combines retrieval and generation"
   },
   {
-    "question": "How does FAISS work?",
-    "answer": "FAISS is a vector similarity search library. It creates indexes of vector embeddings to enable fast nearest neighbor search for finding similar documents efficiently.",
-    "contexts": ["FAISS uses approximate nearest neighbor search algorithms to quickly find similar vectors"],
-    "ground_truth": "FAISS is a library for efficient similarity search and clustering of vectors"
+    "question": "How does Chroma work?",
+    "answer": "Chroma is a vector database. It stores vector embeddings and lets you run similarity search over them to quickly find the documents whose meaning is closest to a query.",
+    "contexts": ["Chroma stores embeddings and metadata and runs similarity search to return the closest vectors to a query"],
+    "ground_truth": "Chroma is a vector database for storing embeddings and running similarity search over them"
   },
   {
     "question": "What is the purpose of embeddings?",

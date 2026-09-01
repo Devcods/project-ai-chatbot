@@ -1,3 +1,28 @@
+# ============================================================================
+# app.py — the Streamlit web UI for the RAG PDF Q&A app
+# ============================================================================
+#
+# HOW STREAMLIT WORKS (read this once, the rest of the file will make sense):
+#
+# 1. A Streamlit app is just a normal Python script. Streamlit runs it
+#    top-to-bottom to draw the page.
+#
+# 2. Every time the user interacts with a widget (types in a box, clicks a
+#    button, uploads a file), Streamlit RE-RUNS THE WHOLE SCRIPT again from
+#    the top. There is no "onClick" callback like in JavaScript — the script
+#    simply runs again, and this time the widget returns its new value.
+#
+# 3. Because the script re-runs constantly, anything slow or stateful needs
+#    protecting:
+#       - @st.cache_resource / @st.cache_data  -> "don't redo this every rerun"
+#       - st.session_state                     -> "remember this between reruns"
+#
+# 4. Widgets are functions that RETURN their current value:
+#       name = st.text_input("Your name")   # name is a str
+#       go   = st.button("Go")              # go is True only on the rerun
+#                                           # triggered by the click
+# ============================================================================
+
 import os
 import tempfile
 
@@ -8,130 +33,129 @@ from chunk import Chunk
 from embedding import Embedding
 
 
-# ─────────────────────────────────────────────────────────────
-# CACHED RESOURCES
-# These functions run ONCE and their return value is kept alive
-# in memory across Streamlit reruns.
-# ─────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
+# PAGE CONFIG — must be the first Streamlit call in the script.
+# Sets the browser tab title and how wide the content area is.
+# ----------------------------------------------------------------------------
+st.set_page_config(page_title="AI Document Q&A", page_icon="📄")
 
-@st.cache_resource(show_spinner="Processing PDF — this runs only once per file...")
+
+# ----------------------------------------------------------------------------
+# CACHED HELPERS
+#
+# These two functions do the slow work (calling OpenAI). We wrap them in
+# @st.cache_resource so Streamlit runs the body ONCE and then hands back the
+# same object on every future rerun instead of recomputing.
+#
+# @st.cache_resource is for live objects/connections (a DB client, an ML
+# model, a vector store). @st.cache_data is for plain data (a DataFrame,
+# a dict). We have live objects here, so cache_resource.
+# ----------------------------------------------------------------------------
+
+@st.cache_resource(show_spinner="Reading and indexing your PDF (one-time)...")
 def build_vector_store(file_bytes: bytes, file_name: str):
+    """Turn an uploaded PDF into a searchable Chroma vector store.
+
+    Streamlit decides "have I run this before?" by hashing the arguments.
+    We pass `file_bytes` (raw bytes hash cleanly) instead of the upload
+    object (which does not). Bonus: a different PDF -> different bytes ->
+    cache miss -> it correctly rebuilds for the new file.
     """
-    Chunk the PDF and build the vector store.
-
-    WHY @st.cache_resource:
-      A vector store is a live in-memory object, not plain data.
-      cache_resource keeps the SAME object alive across reruns
-      instead of rebuilding (and re-paying OpenAI) every time.
-
-    WHY file_bytes is the argument (and not the UploadedFile object):
-      Streamlit decides "have I seen these arguments before?" by
-      hashing them. Raw bytes hash cleanly. An UploadedFile object
-      does not — Streamlit would either error or miss the cache.
-      Passing bytes also means: upload a DIFFERENT pdf -> different
-      bytes -> different hash -> cache miss -> correctly rebuilds.
-
-    Args:
-        file_bytes: raw contents of the uploaded PDF
-        file_name:  original filename (part of the cache key)
-
-    Returns:
-        A vector store ready to be queried.
-    """
-    # Write the uploaded bytes to a real file on disk, because
-    # PyPDFLoader (inside Chunk -> PdfLoader) needs a file PATH,
-    # not an in-memory buffer.
-    #
-    # delete=False so the file survives after the `with` block closes;
-    # we delete it ourselves in the finally block below.
+    # PyPDFLoader needs a real file PATH on disk, not bytes in memory,
+    # so write the upload to a temporary .pdf file first.
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(file_bytes)
         tmp_path = tmp.name
 
     try:
-        # Step 1: load the PDF and split it into overlapping chunks
-        chunker = Chunk(tmp_path)
-        chunks = chunker.create_chunks()
+        # Step 1+2: load the PDF and split it into overlapping text chunks.
+        chunks = Chunk(tmp_path).create_chunks()
 
-        # Step 2: embed every chunk and index them in FAISS.
-        # THIS is the expensive step — one OpenAI API call per batch
-        # of chunks. Everything above exists to make sure it runs once.
-        embedder = Embedding()
-        vector_store = embedder.create_vector_store(chunks)
-
+        # Step 3: embed every chunk with OpenAI and store the vectors in
+        # Chroma. This is the expensive call the cache is protecting.
+        vector_store = Embedding().create_vector_store(chunks)
         return vector_store
-
     finally:
-        # Always clean up the temp file, even if chunking/embedding
-        # raised. Your old code left a stale temp.pdf in the repo root
-        # and reused the same filename for every user and every upload.
+        # Delete the temp file no matter what (even if the steps above fail).
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
 
 @st.cache_resource(show_spinner=False)
-def get_llm():
-    """
-    Build the LLM client once.
-
-    WHY cache this too:
-      LLM() constructs a ChatOpenAI client (and, in your current code,
-      a Retrieval -> Embedding -> OpenAIEmbeddings chain). Rebuilding
-      that on every rerun is pure waste. No arguments means the cache
-      key is constant, so this runs exactly once per session.
-    """
+def get_llm() -> LLM:
+    """Build the LLM client once and reuse it for every question."""
     return LLM()
 
 
-# ─────────────────────────────────────────────────────────────
-# UI
-# Everything below here re-runs top-to-bottom on every interaction.
-# That is fine now, because the expensive work sits behind the
-# cached functions above.
-# ─────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
+# THE PAGE
+# Everything below runs top-to-bottom on the first load and on every rerun.
+# ----------------------------------------------------------------------------
 
-def main():
-    st.title("AI Document Q&A")
+st.title("📄 AI Document Q&A")
+st.caption("Upload a PDF, ask a question, get an answer grounded in the document.")
 
-    uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
+# st.file_uploader returns None until a file is chosen, then an
+# UploadedFile object. type="pdf" restricts what the user can pick.
+uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
-    # Nothing uploaded yet — show a hint and stop.
-    # st.stop() halts this rerun cleanly instead of nesting the whole
-    # app inside an `if` block.
-    if uploaded_file is None:
-        st.info("Upload a PDF to get started.")
-        st.stop()
+# If nothing is uploaded yet, show a hint and stop this rerun here.
+# st.stop() ends the script early so we don't run the Q&A code below
+# with no document loaded.
+if uploaded_file is None:
+    st.info("Waiting for a PDF...")
+    st.stop()
 
-    # Read the file into memory ONCE per rerun.
-    # .getvalue() returns bytes and (unlike .read()) does not consume
-    # the buffer, so it stays readable on later reruns.
-    file_bytes = uploaded_file.getvalue()
+# .getvalue() returns the file's bytes without consuming the buffer,
+# so it still works on later reruns. (.read() would empty it.)
+file_bytes = uploaded_file.getvalue()
 
-    # First call for this file: builds and caches the store (slow).
-    # Every later rerun with the same file: instant cache hit (free).
-    vector_store = build_vector_store(file_bytes, uploaded_file.name)
+# First time for this file: slow (embeds the PDF). Every rerun after: instant.
+vector_store = build_vector_store(file_bytes, uploaded_file.name)
+st.success(f"Ready: **{uploaded_file.name}**")
 
-    st.success(f"Ready: {uploaded_file.name}")
+# ----------------------------------------------------------------------------
+# CHAT MEMORY
+# st.session_state is a dict that survives reruns. We keep the whole
+# conversation in st.session_state.messages so (a) the chat stays on screen
+# and (b) we can feed past turns back to the LLM as memory.
+# Each item is a dict: {"role": "user" | "assistant", "content": "..."}
+# Always initialise a key before you read it.
+# ----------------------------------------------------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    question = st.text_input("Ask a question about your document")
+# Re-draw the whole conversation on every rerun.
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):        # a "user" or "assistant" bubble
+        st.write(msg["content"])
 
-    if st.button("Get Answer"):
-        # Guard against an empty submission
-        if not question.strip():
-            st.warning("Please enter a question first.")
-            st.stop()
+# st.chat_input is pinned to the bottom of the page. It returns the typed
+# text once (on submit) and None on every other rerun.
+question = st.chat_input("Ask a question about your document")
 
-        llm = get_llm()
+if question:
+    # 1. Save and show the user's message.
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.write(question)
 
-        # Wrap the API call. A network blip or a bad key should show
-        # the user an error, not dump a raw traceback into the page.
+    # 2. Build the memory we pass to the LLM: the messages BEFORE this one,
+    #    as (role, text) pairs. We keep only the last 6 (about 3 exchanges)
+    #    so the prompt stays small and the OpenAI cost stays predictable.
+    history = []
+    for msg in st.session_state.messages[-7:-1]:
+        history.append((msg["role"], msg["content"]))
+
+    # 3. Ask the LLM, then show and save the answer.
+    with st.chat_message("assistant"):
         try:
             with st.spinner("Thinking..."):
-                answer = llm.generate_response(question, vector_store)
+                answer = get_llm().generate_response(question, vector_store, history)
             st.write(answer)
         except Exception as e:
-            st.error(f"Something went wrong generating the answer: {e}")
+            # Show a friendly error instead of a raw traceback on the page.
+            answer = f"Something went wrong: {e}"
+            st.error(answer)
 
-
-if __name__ == "__main__":
-    main()
+    st.session_state.messages.append({"role": "assistant", "content": answer})
